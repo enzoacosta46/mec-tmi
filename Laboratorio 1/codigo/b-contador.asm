@@ -8,6 +8,17 @@
 .org 0x0000
     rjmp init
 
+.org 0x0002
+    rjmp isr_inc
+
+.org 0x0004
+    rjmp isr_dec
+
+.org 0x000A
+    rjmp isr_reset
+
+.org 0x0034
+
 init:
 	cli
 
@@ -59,3 +70,59 @@ init:
 main:
 ;;;;;;;;;;;;;;;;;;;;;
     rjmp main
+
+; En las interrupciones se debe
+; persistir el registro de estado
+; en el stack.
+
+; Incrementar
+isr_inc:
+    push temp
+    in temp, SREG
+    push temp
+
+    cpi contador, 9
+    breq inc_fin
+    inc contador
+
+inc_fin:
+    pop temp
+    out SREG, temp
+    pop temp
+    reti
+
+
+; Decrementar
+isr_dec:
+    push temp
+    in temp, SREG
+    push temp
+
+    tst contador
+    breq dec_fin
+    dec contador
+
+dec_fin:
+    pop temp
+    out SREG, temp
+    pop temp
+    reti
+
+
+; Reset
+isr_reset:
+    push temp
+    in temp, SREG
+    push temp
+
+    ; PCINT también ocurre al soltar el botón
+    sbic PIND, PIND4
+    rjmp reset_fin
+
+    clr contador
+
+reset_fin:
+    pop temp
+    out SREG, temp
+    pop temp
+    reti
