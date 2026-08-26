@@ -2,9 +2,9 @@
 
 .def temp = r16
 .def debounce = r18
+.def boton_activo = r19
 .def contador = r20
 .def patron = r21
-
 
 .cseg
 
@@ -52,7 +52,8 @@ init:
 
     ; Contador inicia en 0
     clr contador
-    clr debounce
+	clr debounce
+	clr boton_activo
 
     ; Guardar LUT en SRAM
     rcall guardar_codigos
@@ -108,13 +109,16 @@ isr_inc:
     in temp, SREG
     push temp
 
-	tst debounce
+    ; Ignorar si hay un botón todavía activo
+    tst boton_activo
     brne inc_fin
 
+    ldi boton_activo, 1
     ldi debounce, 20
 
     cpi contador, 9
     breq inc_fin
+
     inc contador
 
 inc_fin:
@@ -130,13 +134,15 @@ isr_dec:
     in temp, SREG
     push temp
 
-	tst debounce
+    tst boton_activo
     brne dec_fin
 
+    ldi boton_activo, 2
     ldi debounce, 20
 
     tst contador
     breq dec_fin
+
     dec contador
 
 dec_fin:
@@ -152,14 +158,16 @@ isr_reset:
     in temp, SREG
     push temp
 
-    ; PCINT también ocurre al soltar el botón
+    ; PCINT también ocurre al liberar
     sbic PIND, PIND4
     rjmp reset_fin
 
-	tst debounce
+    tst boton_activo
     brne reset_fin
 
-	ldi debounce, 20
+    ldi boton_activo, 3
+    ldi debounce, 20
+
     clr contador
 
 reset_fin:
@@ -168,16 +176,55 @@ reset_fin:
     pop temp
     reti
 
-; Timer0 - debouncing
+
+; Timer0 - antirrebote
 isr_timer0:
     push temp
     in temp, SREG
     push temp
 
-    tst debounce
+    tst boton_activo
     breq timer_fin
 
+    cpi boton_activo, 1
+    breq revisar_inc
+
+    cpi boton_activo, 2
+    breq revisar_dec
+
+    ; Botón Reset
+    sbic PIND, PIND4
+    rjmp liberado
+    rjmp presionado
+
+
+revisar_inc:
+    sbic PIND, PIND2
+    rjmp liberado
+    rjmp presionado
+
+
+revisar_dec:
+    sbic PIND, PIND3
+    rjmp liberado
+    rjmp presionado
+
+
+; Mientras continúe presionado,
+; mantener el tiempo de debounce
+presionado:
+    ldi debounce, 20
+    rjmp timer_fin
+
+
+; Al liberarse debe permanecer
+; estable durante 20 ms
+liberado:
     dec debounce
+    brne timer_fin
+
+    clr boton_activo
+
 
 timer_fin:
     pop temp
