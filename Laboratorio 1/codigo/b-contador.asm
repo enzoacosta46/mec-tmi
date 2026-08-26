@@ -1,7 +1,10 @@
 ﻿.include "m328pdef.inc"
 
 .def temp = r16
+.def debounce = r18
 .def contador = r20
+.def patron = r21
+
 
 .cseg
 
@@ -16,6 +19,9 @@
 
 .org 0x000A
     rjmp isr_reset
+
+.org 0x001C
+    rjmp isr_timer0
 
 .org 0x0034
 
@@ -46,6 +52,10 @@ init:
 
     ; Contador inicia en 0
     clr contador
+    clr debounce
+
+    ; Guardar LUT en SRAM
+    rcall guardar_codigos
 
 	; INT0 e INT1 por flanco de bajada
     ldi temp, (1 << ISC01) | (1 << ISC11)
@@ -63,12 +73,29 @@ init:
     ldi temp, (1 << PCINT20)
     sts PCMSK2, temp
 
+	; Timer0 en CTC
+    ldi temp, (1 << WGM01)
+    out TCCR0A, temp
+
+    ; Interrupción cada 1 ms
+    ldi temp, 249
+    out OCR0A, temp
+
+    ; Prescaler 64
+    ldi temp, (1 << CS01) | (1 << CS00)
+    out TCCR0B, temp
+
+    ; Habilitar interrupción Timer0
+    ldi temp, (1 << OCIE0A)
+    sts TIMSK0, temp
+
 	sei
 
 	
 ;;;;;;;;;;;;;;;;;;;;;
 main:
 ;;;;;;;;;;;;;;;;;;;;;
+    rcall mostrar_display
     rjmp main
 
 ; En las interrupciones se debe
@@ -80,6 +107,11 @@ isr_inc:
     push temp
     in temp, SREG
     push temp
+
+	tst debounce
+    brne inc_fin
+
+    ldi debounce, 20
 
     cpi contador, 9
     breq inc_fin
@@ -97,6 +129,11 @@ isr_dec:
     push temp
     in temp, SREG
     push temp
+
+	tst debounce
+    brne dec_fin
+
+    ldi debounce, 20
 
     tst contador
     breq dec_fin
@@ -119,6 +156,10 @@ isr_reset:
     sbic PIND, PIND4
     rjmp reset_fin
 
+	tst debounce
+    brne reset_fin
+
+	ldi debounce, 20
     clr contador
 
 reset_fin:
@@ -126,3 +167,77 @@ reset_fin:
     out SREG, temp
     pop temp
     reti
+
+; Timer0 - debouncing
+isr_timer0:
+    push temp
+    in temp, SREG
+    push temp
+
+    tst debounce
+    breq timer_fin
+
+    dec debounce
+
+timer_fin:
+    pop temp
+    out SREG, temp
+    pop temp
+    reti
+
+
+; Obtener patrón desde la LUT
+get_7seg_code:
+    ldi r28, 0x00
+    ldi r29, 0x01
+
+    add r28, contador
+    ld patron, Y
+
+    ret
+
+
+; Mostrar contador en display
+mostrar_display:
+    rcall get_7seg_code
+
+    ; Segmentos A-F
+    mov temp, patron
+    andi temp, 0b00111111
+    out PORTB, temp
+
+    ; Segmento G
+    cbi PORTD, PORTD7
+    sbrc patron, 6
+    sbi PORTD, PORTD7
+
+    ret
+
+
+; Guardar LUT desde 0x0100
+guardar_codigos:
+    ldi r28, 0x00
+    ldi r29, 0x01
+
+    ldi temp, 0x3F       ; 0
+    st Y+, temp
+    ldi temp, 0x06       ; 1
+    st Y+, temp
+    ldi temp, 0x5B       ; 2
+    st Y+, temp
+    ldi temp, 0x4F       ; 3
+    st Y+, temp
+    ldi temp, 0x66       ; 4
+    st Y+, temp
+    ldi temp, 0x6D       ; 5
+    st Y+, temp
+    ldi temp, 0x7D       ; 6
+    st Y+, temp
+    ldi temp, 0x07       ; 7
+    st Y+, temp
+    ldi temp, 0x7F       ; 8
+    st Y+, temp
+    ldi temp, 0x6F       ; 9
+    st Y+, temp
+
+    ret
