@@ -154,7 +154,7 @@ isr_sig:
     ldi boton_activo, 1
     ldi debounce, 20
 
-    cpi secuencia, 4
+    cpi secuencia, 8
     breq sig_inicio
 
     inc secuencia
@@ -197,7 +197,7 @@ isr_ant:
 
 
 ant_final:
-    ldi secuencia, 4
+    ldi secuencia, 8
 
 
 ant_cambio:
@@ -271,6 +271,7 @@ timer_debounce:
     cpi boton_activo, 2
     breq revisar_ant
 
+
     ; Botón Reset
     sbic PIND, PIND4
     rjmp liberado
@@ -331,9 +332,20 @@ inicializar_secuencia:
     cpi secuencia, 3
     breq init_seq3
 
-    ; Secuencia 4
-    ldi patron, 0b00000001
-    rjmp init_fin
+    cpi secuencia, 4
+    breq init_seq4
+
+    cpi secuencia, 5
+    breq init_seq5
+
+    cpi secuencia, 6
+    breq init_seq6
+
+    cpi secuencia, 7
+    breq init_seq7
+
+    ; Secuencia 8
+    rjmp init_seq8
 
 
 init_seq1:
@@ -348,6 +360,32 @@ init_seq2:
 
 init_seq3:
     ldi patron, 0b00000001
+    rjmp init_fin
+
+
+init_seq4:
+    ldi patron, 0b00000001
+    rjmp init_fin
+
+
+init_seq5:
+    ldi patron, 0b01010101
+    rjmp init_fin
+
+
+init_seq6:
+    ldi patron, 0b10000001
+    rjmp init_fin
+
+
+init_seq7:
+    ldi patron, 0b00001111
+    rjmp init_fin
+
+
+init_seq8:
+    clr patron
+    clr estado_seq
 
 
 init_fin:
@@ -371,6 +409,18 @@ actualizar_secuencia:
     cpi secuencia, 4
     breq actualizar_seq4
 
+    cpi secuencia, 5
+    breq actualizar_seq5
+
+    cpi secuencia, 6
+    breq actualizar_seq6
+
+    cpi secuencia, 7
+    breq actualizar_seq7
+
+    cpi secuencia, 8
+    breq actualizar_seq8
+
     ret
 
 
@@ -388,6 +438,22 @@ actualizar_seq3:
 
 actualizar_seq4:
     rcall secuencia4
+    ret
+
+actualizar_seq5:
+    rcall secuencia5
+    ret
+
+actualizar_seq6:
+    rcall secuencia6
+    ret
+
+actualizar_seq7:
+    rcall secuencia7
+    ret
+
+actualizar_seq8:
+    rcall secuencia8
     ret
 
 
@@ -505,17 +571,138 @@ seq4_rol:
 
 seq4_vaciar:
 
-    tst patron
+    cpi patron, 0b00000001
     brne seq4_ror
 
     clr estado_seq
-    ldi patron, 0b00000001
+    sec
+    rol patron
     ret
 
 
 seq4_ror:
     clc
     ror patron
+    ret
+
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+; SECUENCIA 5
+; LEDs alternados
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+secuencia5:
+
+    ; 01010101 <-> 10101010
+    ldi temp, 0b11111111
+    eor patron, temp
+
+    ret
+
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+; SECUENCIA 6
+; Extremos hacia el centro y regreso
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+secuencia6:
+
+    ; estado_seq = 0: hacia el centro
+    ; estado_seq = 1: hacia los extremos
+
+    tst estado_seq
+    brne seq6_afuera
+
+
+seq6_adentro:
+
+    ; Al llegar al centro, cambiar dirección
+    cpi patron, 0b00011000
+    brne seq6_mover_adentro
+
+    ldi estado_seq, 1
+    rjmp seq6_mover_afuera
+
+
+seq6_mover_adentro:
+
+    ; Parte izquierda
+    mov temp, patron
+    andi temp, 0b11110000
+    lsr temp
+
+    ; Parte derecha
+    andi patron, 0b00001111
+    lsl patron
+
+    or patron, temp
+
+    ret
+
+
+seq6_afuera:
+
+    ; Al llegar a los extremos, cambiar dirección
+    cpi patron, 0b10000001
+    brne seq6_mover_afuera
+
+    clr estado_seq
+    rjmp seq6_mover_adentro
+
+
+seq6_mover_afuera:
+
+    ; Parte izquierda
+    mov temp, patron
+    andi temp, 0b11110000
+    lsl temp
+
+    ; Parte derecha
+    andi patron, 0b00001111
+    lsr patron
+
+    or patron, temp
+
+    ret
+
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+; SECUENCIA 7
+; Alternar ambas mitades
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+secuencia7:
+
+    ; 00001111 <-> 11110000
+    swap patron
+
+    ret
+
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+; SECUENCIA 8
+; Conteo binario reflejado
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+secuencia8:
+
+    ; Contador de 4 bits
+    inc estado_seq
+    andi estado_seq, 0b00001111
+
+    ; Copiar valor al patrón
+    mov patron, estado_seq
+
+    ; Repetir el nibble en la mitad superior
+    mov temp, patron
+    swap temp
+
+    or patron, temp
+
     ret
 
 
