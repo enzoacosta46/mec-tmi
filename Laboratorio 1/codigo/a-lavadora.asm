@@ -6,6 +6,10 @@
 .def boton_activo = r19
 .def carga = r20
 .def flags = r21
+.def tiempo = r22
+.def ciclos_lavado = r23
+.def tick_ms = r24
+
 
 ; Estados
 .equ ST_LISTO           = 0
@@ -24,8 +28,9 @@
 .equ CARGA_MEDIA  = 1
 .equ CARGA_PESADA = 2
 
-; Bits de flags
+; Flags
 .equ FLAG_INICIO = 0
+.equ FLAG_PAUSA  = 1
 
 
 .cseg
@@ -90,6 +95,9 @@ init:
     clr debounce
     clr boton_activo
     clr flags
+    clr tiempo
+    clr ciclos_lavado
+    clr tick_ms
 
 
     ; INT0 e INT1 por flanco de bajada
@@ -123,10 +131,44 @@ init:
 ;;;;;;;;;;;;;;;;;;;;;
 main:
 ;;;;;;;;;;;;;;;;;;;;;
+    rcall seguridad_puerta
     rcall procesar_estado
     rcall actualizar_leds
 
     rjmp main
+
+
+;;;;;;;;;;;;;;;;;;;;;
+; Seguridad de puerta
+;;;;;;;;;;;;;;;;;;;;;
+seguridad_puerta:
+
+    ; Sólo aplica durante el proceso
+    cpi estado, ST_LAVADO_GIRO
+    brlo seguridad_fuera_proceso
+
+    cpi estado, ST_FIN
+    brsh seguridad_fuera_proceso
+
+    ; PD4 = 0 -> puerta cerrada
+    ; PD4 = 1 -> puerta abierta
+    sbic PIND, PIND4
+    rjmp puerta_abierta
+
+    ; Quitar pausa
+    andi flags, 0b11111101
+    ret
+
+
+puerta_abierta:
+    ori flags, (1 << FLAG_PAUSA)
+    rcall motor_stop
+    ret
+
+
+seguridad_fuera_proceso:
+    andi flags, 0b11111101
+    ret
 
 
 ;;;;;;;;;;;;;;;;;;;;;
@@ -135,18 +177,63 @@ main:
 procesar_estado:
 
     cpi estado, ST_LISTO
-    breq estado_listo
+    brne revisar_st_puerta
+    rjmp estado_listo
 
+revisar_st_puerta:
     cpi estado, ST_ESPERA_PUERTA
-    breq estado_espera_puerta
+    brne revisar_st_llenado
+    rjmp estado_espera_puerta
 
+revisar_st_llenado:
     cpi estado, ST_ESPERA_LLENADO
-    breq estado_espera_llenado
+    brne revisar_st_lavado_giro
+    rjmp estado_espera_llenado
 
+revisar_st_lavado_giro:
+    cpi estado, ST_LAVADO_GIRO
+    brne revisar_st_lavado_pausa
+    rjmp estado_lavado_giro
+
+revisar_st_lavado_pausa:
+    cpi estado, ST_LAVADO_PAUSA
+    brne revisar_st_centrifugado
+    rjmp estado_lavado_pausa
+
+revisar_st_centrifugado:
+    cpi estado, ST_CENTRIFUGADO
+    brne revisar_st_secado_der
+    rjmp estado_centrifugado
+
+revisar_st_secado_der:
+    cpi estado, ST_SECADO_DER
+    brne revisar_st_secado_pausa
+    rjmp estado_secado_der
+
+revisar_st_secado_pausa:
+    cpi estado, ST_SECADO_PAUSA
+    brne revisar_st_secado_izq
+    rjmp estado_secado_pausa
+
+revisar_st_secado_izq:
+    cpi estado, ST_SECADO_IZQ
+    brne revisar_st_fin
+    rjmp estado_secado_izq
+
+revisar_st_fin:
+    cpi estado, ST_FIN
+    brne estado_desconocido
+    rjmp estado_fin
+
+estado_desconocido:
     ret
 
 
+;;;;;;;;;;;;;;;;;;;;;
+; LISTO
+;;;;;;;;;;;;;;;;;;;;;
 estado_listo:
+    rcall motor_stop
 
     ; Esperar pulsador de inicio
     sbrs flags, FLAG_INICIO
@@ -155,14 +242,20 @@ estado_listo:
     ; Limpiar evento
     andi flags, ~(1 << FLAG_INICIO)
 
+    clr ciclos_lavado
+    clr tiempo
+
     ldi estado, ST_ESPERA_PUERTA
     ret
 
 
+;;;;;;;;;;;;;;;;;;;;;
+; ESPERA PUERTA
+;;;;;;;;;;;;;;;;;;;;;
 estado_espera_puerta:
+    rcall motor_stop
 
-    ; 0 = puerta cerrada
-    ; 1 = puerta abierta
+    ; Esperar puerta cerrada
     sbic PIND, PIND4
     ret
 
@@ -170,18 +263,24 @@ estado_espera_puerta:
     ret
 
 
+;;;;;;;;;;;;;;;;;;;;;
+; ESPERA LLENADO
+;;;;;;;;;;;;;;;;;;;;;
 estado_espera_llenado:
+    rcall motor_stop
 
     ; Si se abre la puerta, volver a esperar
     sbic PIND, PIND4
     rjmp volver_espera_puerta
 
-    ; 0 = llenado alcanzado
-    ; 1 = todavía no lleno
+    ; Esperar llenado
     sbic PIND, PIND5
     ret
 
+    clr ciclos_lavado
+
     ldi estado, ST_LAVADO_GIRO
+    rcall cargar_lavado_giro
     ret
 
 
@@ -191,7 +290,333 @@ volver_espera_puerta:
 
 
 ;;;;;;;;;;;;;;;;;;;;;
-; Actualización de LEDs
+; LAVADO - GIRO
+;;;;;;;;;;;;;;;;;;;;;
+estado_lavado_giro:
+
+    ; Proceso pausado por puerta
+    sbrc flags, FLAG_PAUSA
+    ret
+
+    rcall motor_derecha
+
+    tst tiempo
+    brne lavado_giro_fin
+
+    rcall motor_stop
+
+    ldi estado, ST_LAVADO_PAUSA
+    rcall cargar_lavado_pausa
+
+
+lavado_giro_fin:
+    ret
+
+
+;;;;;;;;;;;;;;;;;;;;;
+; LAVADO - PAUSA
+;;;;;;;;;;;;;;;;;;;;;
+estado_lavado_pausa:
+
+    sbrc flags, FLAG_PAUSA
+    ret
+
+    rcall motor_stop
+
+    tst tiempo
+    brne lavado_pausa_fin
+
+    ; Ciclo giro + pausa completado
+    inc ciclos_lavado
+
+    cpi ciclos_lavado, 5
+    breq lavado_completo
+
+    ldi estado, ST_LAVADO_GIRO
+    rcall cargar_lavado_giro
+    ret
+
+
+lavado_completo:
+    ldi estado, ST_CENTRIFUGADO
+    rcall cargar_centrifugado
+
+
+lavado_pausa_fin:
+    ret
+
+
+;;;;;;;;;;;;;;;;;;;;;
+; CENTRIFUGADO
+;;;;;;;;;;;;;;;;;;;;;
+estado_centrifugado:
+
+    sbrc flags, FLAG_PAUSA
+    ret
+
+    rcall motor_derecha
+
+    tst tiempo
+    brne centrifugado_fin
+
+    rcall motor_stop
+
+    ldi estado, ST_SECADO_DER
+    rcall cargar_secado_giro
+
+
+centrifugado_fin:
+    ret
+
+
+;;;;;;;;;;;;;;;;;;;;;
+; SECADO - DERECHA
+;;;;;;;;;;;;;;;;;;;;;
+estado_secado_der:
+
+    sbrc flags, FLAG_PAUSA
+    ret
+
+    rcall motor_derecha
+
+    tst tiempo
+    brne secado_der_fin
+
+    rcall motor_stop
+
+    ldi estado, ST_SECADO_PAUSA
+    rcall cargar_secado_pausa
+
+
+secado_der_fin:
+    ret
+
+
+;;;;;;;;;;;;;;;;;;;;;
+; SECADO - PAUSA
+;;;;;;;;;;;;;;;;;;;;;
+estado_secado_pausa:
+
+    sbrc flags, FLAG_PAUSA
+    ret
+
+    rcall motor_stop
+
+    tst tiempo
+    brne secado_pausa_fin
+
+    ldi estado, ST_SECADO_IZQ
+    rcall cargar_secado_giro
+
+
+secado_pausa_fin:
+    ret
+
+
+;;;;;;;;;;;;;;;;;;;;;
+; SECADO - IZQUIERDA
+;;;;;;;;;;;;;;;;;;;;;
+estado_secado_izq:
+
+    sbrc flags, FLAG_PAUSA
+    ret
+
+    rcall motor_izquierda
+
+    tst tiempo
+    brne secado_izq_fin
+
+    rcall motor_stop
+
+    ldi estado, ST_FIN
+
+
+secado_izq_fin:
+    ret
+
+
+;;;;;;;;;;;;;;;;;;;;;
+; FIN
+;;;;;;;;;;;;;;;;;;;;;
+estado_fin:
+    rcall motor_stop
+
+    ; Inicio permite volver a LISTO
+    sbrs flags, FLAG_INICIO
+    ret
+
+    andi flags, 0b11111110
+
+    clr tiempo
+    clr ciclos_lavado
+
+    ldi estado, ST_LISTO
+    ret
+
+
+;;;;;;;;;;;;;;;;;;;;;
+; Tiempos de lavado
+; tiempo se expresa en 100 ms
+;;;;;;;;;;;;;;;;;;;;;
+
+; Giro:
+; ligera = 2 s
+; media  = 3 s
+; pesada = 4 s
+cargar_lavado_giro:
+
+    cpi carga, CARGA_LIGERA
+    breq lavado_giro_ligera
+
+    cpi carga, CARGA_MEDIA
+    breq lavado_giro_media
+
+    ldi temp, 40
+    rjmp iniciar_tiempo
+
+
+lavado_giro_ligera:
+    ldi temp, 20
+    rjmp iniciar_tiempo
+
+
+lavado_giro_media:
+    ldi temp, 30
+    rjmp iniciar_tiempo
+
+
+; Pausa:
+; ligera = 1 s
+; media  = 2 s
+; pesada = 3 s
+cargar_lavado_pausa:
+
+    cpi carga, CARGA_LIGERA
+    breq lavado_pausa_ligera
+
+    cpi carga, CARGA_MEDIA
+    breq lavado_pausa_media
+
+    ldi temp, 30
+    rjmp iniciar_tiempo
+
+
+lavado_pausa_ligera:
+    ldi temp, 10
+    rjmp iniciar_tiempo
+
+
+lavado_pausa_media:
+    ldi temp, 20
+    rjmp iniciar_tiempo
+
+
+; Centrifugado:
+; ligera = 15 s
+; media  = 18 s
+; pesada = 21 s
+cargar_centrifugado:
+
+    cpi carga, CARGA_LIGERA
+    breq centrifugado_ligera
+
+    cpi carga, CARGA_MEDIA
+    breq centrifugado_media
+
+    ldi temp, 210
+    rjmp iniciar_tiempo
+
+
+centrifugado_ligera:
+    ldi temp, 150
+    rjmp iniciar_tiempo
+
+
+centrifugado_media:
+    ldi temp, 180
+    rjmp iniciar_tiempo
+
+
+; Secado - giro:
+; ligera = 5 s
+; media  = 7 s
+; pesada = 9 s
+cargar_secado_giro:
+
+    cpi carga, CARGA_LIGERA
+    breq secado_giro_ligera
+
+    cpi carga, CARGA_MEDIA
+    breq secado_giro_media
+
+    ldi temp, 90
+    rjmp iniciar_tiempo
+
+
+secado_giro_ligera:
+    ldi temp, 50
+    rjmp iniciar_tiempo
+
+
+secado_giro_media:
+    ldi temp, 70
+    rjmp iniciar_tiempo
+
+
+; Secado - pausa:
+; ligera = 3 s
+; media  = 5 s
+; pesada = 7 s
+cargar_secado_pausa:
+
+    cpi carga, CARGA_LIGERA
+    breq secado_pausa_ligera
+
+    cpi carga, CARGA_MEDIA
+    breq secado_pausa_media
+
+    ldi temp, 70
+    rjmp iniciar_tiempo
+
+
+secado_pausa_ligera:
+    ldi temp, 30
+    rjmp iniciar_tiempo
+
+
+secado_pausa_media:
+    ldi temp, 50
+
+
+iniciar_tiempo:
+    clr tick_ms
+    mov tiempo, temp
+    ret
+
+
+;;;;;;;;;;;;;;;;;;;;;
+; Motor
+;;;;;;;;;;;;;;;;;;;;;
+motor_stop:
+    cbi PORTD, PORTD6
+    cbi PORTD, PORTD7
+    ret
+
+
+motor_derecha:
+    cbi PORTD, PORTD7
+    sbi PORTD, PORTD6
+    ret
+
+
+motor_izquierda:
+    cbi PORTD, PORTD6
+    sbi PORTD, PORTD7
+    ret
+
+
+;;;;;;;;;;;;;;;;;;;;;
+; LEDs
 ;;;;;;;;;;;;;;;;;;;;;
 actualizar_leds:
 
@@ -220,7 +645,6 @@ led_carga_media:
 
 
 actualizar_estado:
-
     clr temp
 
     cpi estado, ST_LISTO
@@ -247,7 +671,7 @@ actualizar_estado:
     cpi estado, ST_FIN
     breq led_fin
 
-    ; Estados de espera: ningún LED de proceso
+    ; Estados de espera
     out PORTC, temp
     ret
 
@@ -296,10 +720,15 @@ isr_inicio:
     ldi boton_activo, 1
     ldi debounce, 20
 
-    ; Inicio solo tiene efecto en LISTO
+    ; Inicio se acepta en LISTO o FIN
     cpi estado, ST_LISTO
+    breq aceptar_inicio
+
+    cpi estado, ST_FIN
     brne inicio_fin
 
+
+aceptar_inicio:
     ori flags, (1 << FLAG_INICIO)
 
 
@@ -344,15 +773,17 @@ carga_fin:
 
 
 ;;;;;;;;;;;;;;;;;;;;;
-; Timer0 - antirrebote
+; Timer0 - antirrebote y temporización
 ;;;;;;;;;;;;;;;;;;;;;
 isr_timer0:
     push temp
     in temp, SREG
     push temp
 
+
+    ; Antirrebote
     tst boton_activo
-    breq timer_fin
+    breq temporizacion
 
     cpi boton_activo, 1
     breq revisar_inicio
@@ -360,25 +791,47 @@ isr_timer0:
     ; Botón selección
     sbic PIND, PIND3
     rjmp liberado
+
     rjmp presionado
 
 
 revisar_inicio:
     sbic PIND, PIND2
     rjmp liberado
+
     rjmp presionado
 
 
 presionado:
     ldi debounce, 20
-    rjmp timer_fin
+    rjmp temporizacion
 
 
 liberado:
     dec debounce
-    brne timer_fin
+    brne temporizacion
 
     clr boton_activo
+
+
+; Generar unidades de 100 ms
+temporizacion:
+    inc tick_ms
+
+    cpi tick_ms, 100
+    brlo timer_fin
+
+    clr tick_ms
+
+    ; No hay tiempo activo
+    tst tiempo
+    breq timer_fin
+
+    ; Pausar temporizacion con puerta abierta
+    sbrc flags, FLAG_PAUSA
+    rjmp timer_fin
+
+    dec tiempo
 
 
 timer_fin:
