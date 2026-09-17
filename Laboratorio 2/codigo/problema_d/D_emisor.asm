@@ -32,8 +32,9 @@ inicio:
     ldi r16, LOW(RAMEND)
     out SPL, r16
 
-	; Configurar entradas
+	; Configurar pines
     call configurar_gpio
+	call configurar_usart
 
 
 ;------------------------------------------------------------
@@ -99,6 +100,8 @@ configurar_usart:
 	; Sin paridad, 1 bit stop, 8 bits de datos
 	ldi temp, (1 << UCSZ01) | (1 << UCSZ00)
     sts UCSR0C, temp
+
+	ret
 
 	
 ;------------------------------------------------------------
