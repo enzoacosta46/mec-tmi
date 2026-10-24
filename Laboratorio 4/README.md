@@ -1,4 +1,4 @@
-# Laboratorio 3 - Tecnologías de Microprocesamiento
+# Laboratorio 4 - Tecnologías de Microprocesamiento
 
 ## Microcontrolador
 ATmega328P
@@ -7,7 +7,8 @@ ATmega328P
 C
 
 ## Problemas
-- **Problema A:** Control de temperatura con DHT11, ventilador, calefactor, LCD y UART.
-- **Problema B:** Control de iluminación con LDR, potenciómetro, motor, ADC, PWM y UART.
-- **Problema C:** Clasificador de color con fotocelda, WS2812, servomotor, LCD y UART.
-- **Problema D:** Piano electrónico con 8 pulsadores, 2 buzzers, LCD y UART.
+- **Problema A:** Cajero automático con RFID RC522, tarjetas MIFARE, teclado matricial, LCD y EEPROM.
+- **Problema B:** Banda transportadora con comunicación SPI maestro-esclavo, sensores, motor DC y servomotor.
+- **Problema C:** Sistema de alarma antirrobo con Bluetooth HC-05, LDR, sensor de presencia y control remoto.
+- **Problema D:** Juego de memoria con joystick, matriz LED RGB 8x8, buzzer y EEPROM.
+- **Problema E:** Burbuja de inclinación con MPU6050, comunicación I2C, matriz LED RGB 8x8 y EEPROM.
